@@ -1,3 +1,6 @@
+calibrationdata.yml
+
+## Pre-Build:
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
