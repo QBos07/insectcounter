@@ -1,0 +1,13 @@
+#!pip-compile --output-file=requirements.txt
+
+# main library
+opencv-contrib-python==4.10.0.84
+
+# low level access and utility
+numpy==2.1.1
+
+# configuration and calibration files
+PyYAML==6.0.2
+
+# video stream decoding
+ffmpegcv==0.3.15
