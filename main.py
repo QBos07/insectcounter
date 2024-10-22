@@ -9,9 +9,8 @@ import yaml
 from calibration import do_calibration
 from calibrationsavedata import CalibrationSaveData
 
-CHESSBOARD_SIZE: tuple[int, int] = (8 - 1, 8 - 1)
-
 url: str = "rtsp://guestuser:guestuser@192.168.178.139:554"
+cam_name: str = "cam 1"
 calibration_data_path: str = "calibrationdata.yml"
 cap = ffmpegcv.ReadLiveLast(ffmpegcv.VideoCaptureStreamRT, url, gpu = 0)
 if not cap.isOpened():
@@ -19,12 +18,17 @@ if not cap.isOpened():
     exit()
 
 if os.path.exists(calibration_data_path):
+    print(f"using calibration data from {calibration_data_path} for {cam_name}")
     csd: CalibrationSaveData = yaml.load(open(calibration_data_path), yaml.Loader)
     matrix = csd.matrix
     dist = csd.dist
     calibration_size = csd.size
 else:
-    _, matrix, dist, _, _ = do_calibration(cap, CHESSBOARD_SIZE, 100)
+    print(f"Calibration file \"{calibration_data_path}\" for {cam_name} not found!")
+    number_of_images: int = int(input("Number of images used for calibration: "))
+    chessboard_size_one: int = int(input("Number of tiles on the first axis: "))
+    chessboard_size_two: int = int(input("Number of tiles on the second axis: "))
+    _, matrix, dist, _, _ = do_calibration(cap, (chessboard_size_one, chessboard_size_two), number_of_images)
     calibration_size = cap.size
     csd = CalibrationSaveData(calibration_size, matrix, dist)
     yaml.dump(csd, stream = open(calibration_data_path, "w"))
