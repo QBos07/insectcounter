@@ -1,0 +1,1 @@
+ffmpeg -f dshow -i video="USB  Live camera" -f mjpeg -vcodec copy tcp://localhost:5000

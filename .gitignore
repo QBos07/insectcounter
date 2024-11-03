@@ -1,4 +1,5 @@
-calibrationdata.yml
+calibration*.yml
+config.yml
 
 ## Pre-Build:
 # Byte-compiled / optimized / DLL files
