@@ -2,6 +2,7 @@ import time
 from collections import deque
 import os.path
 from typing import cast
+from dataclasses import dataclass, field
 
 import ffmpegcv
 import cv2 as cv
@@ -10,10 +11,33 @@ import yaml
 from calibration import do_calibration
 from calibrationsavedata import CalibrationSaveData
 from configfiledata import ConfigFileData
+from configfiledata import CameraConfigData
 from to_data import to_data
 
 config_file_path: str = "config.yml"
 config: ConfigFileData = to_data(ConfigFileData, yaml.load(open("config.yml"), yaml.Loader))
+
+
+@dataclass
+class TimingData:
+    frame_start: int = 0
+    decode_end: int = 0
+    remap_end: int = 0
+    fps_end: int = 0
+    show_end: int = 0
+
+
+@dataclass
+class CameraState:
+    config: CameraConfigData
+    csd: CalibrationSaveData
+    cap: ffmpegcv.ffmpeg_noblock.ReadLiveLast
+    maps: tuple[cv.Mat, cv.Mat]
+    roi: tuple[int, int, int, int]
+    timing: TimingData = field(default_factory=TimingData)
+
+
+states: list[CameraState] = []
 
 for cam_config in config.cams:
 
@@ -40,52 +64,46 @@ for cam_config in config.cams:
         print("Cannot open camera")
         exit()
 
-    maps: tuple[cv.Mat, cv.Mat] | None = None
-    roi: tuple[int, int, int, int] | None = None
+    new_camera_matrix, roi = cv.getOptimalNewCameraMatrix(csd.matrix, csd.dist, csd.size, 1, cap.size)
+    maps = cv.initUndistortRectifyMap(csd.matrix, csd.dist, cast(cv.Mat, None), new_camera_matrix,
+                                      cast(tuple[int, int], cap.size), cv.CV_16SC2)
 
-    frame_start = 0
-    decode_end = 0
-    remap_end = 0
-    fps_end = 0
-    show_end = 0
-    input_end = 0
-    fps_roll = deque([], 50)
+    states.append(CameraState(cam_config, csd, cap, maps, cast(tuple[int, int, int, int], roi)))
 
-    while True:
-        frame_start_new = time.time_ns()
+fps_roll = deque([], 50)
+
+while True:
+    frames_start = time.time_ns()
+    for cam in states:
+        new_times = TimingData()
+        new_times.frame_start = time.time_ns()
         # Capture frame-by-frame
-        ret, frame = cap.read()
+        ret, frame = cam.cap.read()
+        # frame = cv.UMat(frame)  # GPU accel over opencl T-API
         if not ret:
             print("Can't receive frame (stream end?). Exiting ...")
             break
-        decode_end_new = time.time_ns()
+        new_times.decode_end = time.time_ns()
 
-        if maps is None:
-            new_camera_matrix, roi = cv.getOptimalNewCameraMatrix(csd.matrix, csd.dist, csd.size, 1, cap.size)
-            maps = cv.initUndistortRectifyMap(csd.matrix, csd.dist, cast(cv.Mat, None), new_camera_matrix,
-                                              cast(tuple[int, int], cap.size), cv.CV_16SC2)
-
-        map_x, map_y = maps
-        x, y, w, h = roi
+        map_x, map_y = cam.maps
+        x, y, w, h = cam.roi
         remapped = cv.remap(frame, map_x, map_y, cv.INTER_LINEAR)[y:y + h, x:x + w]
-        remap_end_new = time.time_ns()
+        new_times.remap_end = time.time_ns()
 
-        decode_time = decode_end - frame_start
-        remap_time = remap_end - decode_end
-        fps_time = fps_end - remap_end
-        show_time = show_end - fps_end
-        input_time = input_end - show_end
-        frame_time = input_end - frame_start
-        if frame_time != 0:
-            current_fps = 1 / (frame_time / 1_000_000_000)
-            fps_roll.append(current_fps)
+        decode_time = cam.timing.decode_end - cam.timing.frame_start
+        remap_time = cam.timing.remap_end - cam.timing.decode_end
+        fps_time = cam.timing.fps_end - cam.timing.remap_end
+        show_time = cam.timing.show_end - cam.timing.fps_end
+        frame_time = cam.timing.show_end - cam.timing.frame_start
+        if len(fps_roll) != 0:
             fps = int(sum(fps_roll) / len(fps_roll) * 10) / 10
         else:
             fps = "undefined"
         cv.putText(remapped, f"Frame time: {int(frame_time / 1000) / 1000}ms", (10, 30), cv.FONT_HERSHEY_SIMPLEX, .75,
                    (150, 0, 150))
         cv.putText(remapped, f"FPS: {fps}", (10, 100), cv.FONT_HERSHEY_DUPLEX, 2.5, (150, 0, 150))
-        cv.putText(remapped, f"Decode time: {int(decode_time / 1000) / 1000}ms", (10, 120), cv.FONT_HERSHEY_SIMPLEX, .75,
+        cv.putText(remapped, f"Decode time: {int(decode_time / 1000) / 1000}ms", (10, 120), cv.FONT_HERSHEY_SIMPLEX,
+                   .75,
                    (150, 0, 150))
         cv.putText(remapped, f"Remap time: {int(remap_time / 1000) / 1000}ms", (10, 140), cv.FONT_HERSHEY_SIMPLEX, .75,
                    (150, 0, 150))
@@ -93,25 +111,24 @@ for cam_config in config.cams:
                    (150, 0, 150))
         cv.putText(remapped, f"Show time: {int(show_time / 1000) / 1000}ms", (10, 180), cv.FONT_HERSHEY_SIMPLEX, .75,
                    (150, 0, 150))
-        cv.putText(remapped, f"Input time: {int(input_time / 1000) / 1000}ms", (10, 200), cv.FONT_HERSHEY_SIMPLEX, .75,
-                   (150, 0, 150))
-        fps_end_new = time.time_ns()
+        new_times.fps_end = time.time_ns()
 
-        cv.imshow(cam_config.name, remapped)
-        show_end_new = time.time_ns()
+        cv.imshow(cam.config.name, remapped)
+        new_times.show_end = time.time_ns()
 
+        cam.timing = new_times
+
+    else:  # I wish python had labeled loops
         if cv.pollKey() == ord('q'):
             break
+        frames_end = time.time_ns()
+        frames_time = frames_end - frames_start
+        current_fps = 1 / (frames_time / 1_000_000_000)
+        fps_roll.append(current_fps)
+        continue
+    break
 
-        input_end_new = time.time_ns()
-
-        frame_start = frame_start_new
-        decode_end = decode_end_new
-        remap_end = remap_end_new
-        fps_end = fps_end_new
-        show_end = show_end_new
-        input_end = input_end_new
-
-    # When everything done, release the capture
-    cap.release()
-    cv.destroyAllWindows()
+# When everything is done, release the capture
+for cam in states:
+    cam.cap.release()
+cv.destroyAllWindows()
