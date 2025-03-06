@@ -4,7 +4,8 @@ from typing import Type, get_args, get_origin, Any, TypeVar
 T = TypeVar("T")
 
 
-def to_data(type_definition: Type[T], data: T | dict[str, Any]) -> T:  # data: dict if T is dataclass
+# data: dict if T is dataclass; list if T is tuple
+def to_data(type_definition: Type[T], data: T | dict[str, Any] | list) -> T:
     origin = get_origin(type_definition)  # remove generic (the args)
     if origin is None:  # or use as is
         origin = type_definition
@@ -25,6 +26,17 @@ def to_data(type_definition: Type[T], data: T | dict[str, Any]) -> T:  # data: d
 
         return type_definition(**field_values)  # instance the dataclass
 
+    if origin is tuple:  # to not do: handle variable length; use a list
+        if not isinstance(data, list):
+            raise TypeError((f"Can only convert from list to tuple, "
+                             f"but trying to convert to {type_definition} from {type(data)} (from {data})"))
+        if len(data) == 0:
+            return ()
+        args = get_args(type_definition)
+        if len(args) == 0:
+            return data
+        return tuple([to_data(args[i], e) for i, e in enumerate(data)])
+
     # type conversion end
     if not isinstance(data, origin):
         raise TypeError(f"Expected type {origin} (from {type_definition}) but got type {type(data)} (from {data})")
@@ -38,14 +50,6 @@ def to_data(type_definition: Type[T], data: T | dict[str, Any]) -> T:  # data: d
             return data
         inside_type = args[0]
         return [to_data(inside_type, e) for e in data]
-
-    if origin is tuple:  # to not do: handle variable length; use a list
-        if len(data) == 0:
-            return ()
-        args = get_args(type_definition)
-        if len(args) == 0:
-            return data
-        return tuple([to_data(args[i], e) for i, e in enumerate(data)])
 
     if origin is dict:
         if len(data) == 0:
